@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/dual_docker" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>
