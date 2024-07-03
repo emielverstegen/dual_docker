@@ -21,8 +21,8 @@
  *                                                                         *
  ***************************************************************************/
 """
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaObject
-from qgis.PyQt.QtGui import QIcon, QMouseEvent
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QTimer
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
 # Initialize Qt resources from file resources.py
@@ -30,11 +30,12 @@ from .resources import *
 # Import the code for the dialog
 from .dual_docker_dialog import DualDockerDialog
 import os.path
-from PyQt5.QtWidgets import QDockWidget, QToolBar, QPushButton
-from PyQt5.QtCore import QEvent, QDataStream, Qt, QObject
-from PyQt5.QtGui import QCursor
-from qgis.PyQt.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtWidgets import QDockWidget
+from PyQt5.QtCore import QEvent, QObject, QCoreApplication, Qt
+from PyQt5.QtGui import QCursor, QMouseEvent
+from qgis.PyQt.QtWidgets import QApplication
 from qgis.core import QgsMessageLog, Qgis
+
 
 class DualDocker:
     """QGIS Plugin Implementation."""
@@ -71,8 +72,16 @@ class DualDocker:
         # Must be set in initGui() to survive plugin reloads
         self.first_start = None
 
+        self.plugin_button = None
         self.dlg = None
-        self.eventFilter: MyEventFilter = None
+        self.selectedWidget = None
+
+        self.eventFilter: DualDockerEventFilter = None
+        self.reparentFlag = False
+        self.reparentNewParent = None
+        self.reparentRecent = False
+
+        self.timer = None
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -144,6 +153,7 @@ class DualDocker:
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
         action.setEnabled(enabled_flag)
+        action.setCheckable(True)
 
         if status_tip is not None:
             action.setStatusTip(status_tip)
@@ -168,7 +178,7 @@ class DualDocker:
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
         icon_path = ':/plugins/dual_docker/icon.png'
-        self.add_action(
+        self.plugin_button = self.add_action(
             icon_path,
             text=self.tr(u'Dual Docker'),
             callback=self.run,
@@ -176,9 +186,6 @@ class DualDocker:
 
         # will be set False in run()
         self.first_start = True
-
-        self.registerEventFilter()
-
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
@@ -190,12 +197,15 @@ class DualDocker:
 
         self.unregisterEventFilter()
 
+        if self.timer:
+            self.timer.stop()
+            self.timer.timeout.disconnect(self.checkReparentFlag)
+
+
     def registerEventFilter(self):
         if not self.eventFilter:
-            #self.eventFilter = MyEventFilter(self.iface.mapCanvas()) #this works
-            self.eventFilter = MyEventFilter(self)
+            self.eventFilter = DualDockerEventFilter(self)
 
-        #self.iface.mapCanvas().viewport().installEventFilter(self.eventFilter)
         QApplication.instance().installEventFilter(self.eventFilter)
 
     def unregisterEventFilter(self):
@@ -210,97 +220,126 @@ class DualDocker:
         # Only create GUI ONCE in callback, so that it will only load when the plugin is started
         if self.first_start == True:
             self.first_start = False
-            self.dlg = DualDockerDialog()
+            self.dlg = DualDockerDialog(self)
 
+        self.dlg.setupUi()
+        self.registerEventFilter()
         # show the window
         self.dlg.show()
 
+        #Create a timer to check for reparenting @TODO: maybe this can be started only when dragging a QDockWidget
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.checkReparentFlag)
+        self.timer.start(100)
+        self.plugin_button.setChecked(True)
 
 
+    def checkReparentFlag(self):
+        """
+        Checks if there is a QDockWidget that needs reparenting and initiates the reparenting.
+        """
+        if self.reparentFlag and not self.reparentRecent:
+            self.reparent(self.selectedWidget, self.reparentNewParent)
+            #self.drop_and_pick(self.selectedWidget)
+            self.reparentFlag = False
 
-class MyEventFilter(QObject):
+
+    def reparent(self, widget, new_parent):
+        """
+        Changes the parent QWidget of a QDockWidget, handles the geometry and dockable areas
+        """
+        # Change the parent
+        widget.setParent(new_parent)
+
+        widget.setFloating(True)
+
+        # Adjust the widget's position to be within the screen's geometry
+        global_pos = QCursor.pos()
+        widget.setGeometry(global_pos.x(), global_pos.y(), widget.width(), widget.height())
+        widget.setAllowedAreas(Qt.AllDockWidgetAreas)
+        # Show the widget
+        widget.show()
+        self.reparentRecent = True
+
+    def drop_and_pick(self, widget):
+        """
+        Emulates releasing and clicking the mouse on a widget to stop the drag event and pick it back up.
+        NOT WORKING AS INTENDED
+        """
+        cursor_pos = QCursor.pos()
+        # Create a mouse release event
+        release_event = QMouseEvent(QEvent.MouseButtonRelease, cursor_pos, Qt.LeftButton,
+                                    Qt.LeftButton, Qt.NoModifier)
+
+        # Post the mouse release event
+        QCoreApplication.postEvent(widget, release_event)
+
+        # Create a mouse press event
+        press_event = QMouseEvent(QEvent.MouseButtonPress, cursor_pos, Qt.LeftButton,
+                                  Qt.LeftButton, Qt.NoModifier)
+
+        # Post the mouse press event
+        QCoreApplication.postEvent(widget, press_event)
+
+class DualDockerEventFilter(QObject):
 
     def __init__(self, parent: QObject = None) -> None:
         super().__init__(parent.iface)
-        self.parent = parent
+        self.parent = parent #Dual Docker class
+        self.dual_docker_window = parent.dlg #DualDocker QMainWindow
+        self.main_window = parent.iface.mainWindow() #QGIS application QMainWindow
+        self.currentWidgetParent = None
         self.dragging = False
         self.dockWidget = None
-        self.currentScreen = None
-        self.desktop = QApplication.instance().desktop()
-
+        self.cursorOverDualDocker = None
+        self.cursorOverMainWindow = None
 
     def eventFilter(self, caller: QObject, event: QEvent) -> bool:
+        """
+        Handles the dragging. Determines which QDockWidget is being dragged, and if it is entering the DualDocker window
+        or the QGIS MainWindow
+        """
+
+        # @TODO: This is working, but not with floating widgets. Somehow the Titlebar is not part of the Widget.
         if event.type() == QEvent.MouseButtonPress:
             # Check if the widget under the cursor is a QDockWidget
             widget = QApplication.widgetAt(QCursor.pos())
             if isinstance(widget, QDockWidget):
                 self.dockWidget = widget
+                self.parent.selectedWidget = widget
+                self.currentWidgetParent = widget.parent()
                 self.dragging = True
                 QgsMessageLog.logMessage(self.dockWidget.objectName(), 'DualDocker', level=Qgis.Info)
 
+
         elif event.type() == QEvent.MouseMove:
-            if self.dragging and self.dockWidget is not None:
-                # Get the global mouse position
-                globalPos = QCursor.pos()
-                # Get the screen number for the global mouse position
-                screenNumber = QApplication.desktop().screenNumber(globalPos)
-                # Check if the screen number has changed
-                if screenNumber != self.currentScreen:
-                    mainWindowScreen = self.desktop.screenNumber(self.parent.iface.mainWindow())
-                    dualDockerScreen = self.desktop.screenNumber(self.parent.dlg)
-                    # Handle the screen change
-                    QgsMessageLog.logMessage(f"Dockwidget {self.dockWidget.objectName()} was dragged from screen to screen "
-                                             f"{screenNumber}. Main window is on screen "
-                                             f"{mainWindowScreen}. Dual Docker is on screen {dualDockerScreen}.",
-                                             'DualDocker', level=Qgis.Info)
-                    QgsMessageLog.logMessage(f"Current parent is {self.dockWidget.parent().objectName()}",
-                                             'DualDocker', level=Qgis.Info)
-                    self.currentScreen = screenNumber
-
-                    if self.currentScreen == mainWindowScreen:
-                        #Moving to Main WindowScreen, reparenting to Main Window
-                        QgsMessageLog.logMessage(f"Attatching {self.dockWidget.objectName()} to Main Window",
-                                                 'DualDocker', level=Qgis.Info)
-                        self.reparent(self.parent.iface.mainWindow())
-
-                    elif self.currentScreen == dualDockerScreen:
-                        QgsMessageLog.logMessage(f"Attatching {self.dockWidget.objectName()} to Dual Docker",
-                                                 'DualDocker', level=Qgis.Info)
-                        self.reparent(self.parent.dlg)
+            global_pos = QCursor.pos()
+            self.cursorOverDualDocker = self.parent.dlg.geometry().contains(global_pos)
+            self.cursorOverMainWindow = self.parent.iface.mainWindow().frameGeometry().contains(global_pos)
 
         elif event.type() == QEvent.MouseButtonRelease:
             if self.dragging and self.dockWidget is not None:
                 # Handle the drop event
                 self.dockWidget = None
                 self.dragging = False
+                self.parent.reparentRecent = False
+
+
+        if self.dragging:
+
+            if self.currentWidgetParent == self.main_window:
+                # Dragging a widget which is connected to main window
+                if self.cursorOverDualDocker and not self.cursorOverMainWindow:
+                    #self.reparent(self.dual_docker_window)
+                    self.parent.reparentFlag = True
+                    self.parent.reparentNewParent = self.dual_docker_window
+
+            elif self.currentWidgetParent == self.dual_docker_window:
+                # Dragging a widget which is connected to main window
+                if not self.cursorOverDualDocker and self.cursorOverMainWindow:
+                    #self.reparent(self.dual_docker_window)
+                    self.parent.reparentFlag = True
+                    self.parent.reparentNewParent = self.main_window
+
+
         return False
-
-    def reparent(self, new_parent):
-        QgsMessageLog.logMessage(f"Reparenting called",
-                                 'DualDocker', level=Qgis.Info)
-        if self.dockWidget.parent() != new_parent:
-            QgsMessageLog.logMessage(f"Start reparenting",
-                                     'DualDocker', level=Qgis.Info)
-
-            QgsMessageLog.logMessage(f"Current parent {self.dockWidget.parent().objectName()}: {self.dockWidget.parent()}",
-                                     'DualDocker', level=Qgis.Info)
-            QgsMessageLog.logMessage(f"New Parent parent {new_parent.objectName()}: {new_parent}",
-                                     'DualDocker', level=Qgis.Info)
-
-            cursor_pos = QCursor.pos()
-
-            self.dockWidget.setParent(None)
-            self.dockWidget.setParent(new_parent)
-            self.dockWidget.setFloating(True)
-            self.dockWidget.setAllowedAreas(Qt.AllDockWidgetAreas)
-            self.dockWidget.move(cursor_pos)
-            self.dockWidget.show()
-
-            #event = QMouseEvent(QEvent.MouseButtonPress,  # type
-            #                    self.dockWidget.pos(),  # local position
-            #                    Qt.LeftButton,  # button
-            #                    Qt.LeftButton,  # buttons
-            #                    Qt.NoModifier)  # modifiers
-
-            # Post the event
-            #QCoreApplication.postEvent(self.dockWidget, event)

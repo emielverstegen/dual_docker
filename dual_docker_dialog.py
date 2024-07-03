@@ -30,27 +30,64 @@ from qgis.PyQt import QtWidgets
 import logging
 from qgis.core import QgsMessageLog, Qgis
 
-from PyQt5.QtWidgets import QDockWidget, QToolBar, QPushButton
-from PyQt5.QtCore import QEvent, QDataStream, Qt
-from PyQt5.QtGui import QCursor
-from qgis.PyQt.QtWidgets import QApplication
-
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QMessageBox, QDockWidget
 
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'dual_docker_dialog_base.ui'))
 
 
-class DualDockerDialog(QtWidgets.QMainWindow, FORM_CLASS):
+#class DualDockerDialog(QtWidgets.QMainWindow, FORM_CLASS):
+class DualDockerDialog(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         """Constructor."""
 
         logging.info("Starting Dual Docker")
         QgsMessageLog.logMessage("Initializing", 'DualDocker', level=Qgis.Info)
+        self.parent = parent
+        #super(DualDockerDialog, self).__init__(parent)
+        super(DualDockerDialog, self).__init__()
 
-        super(DualDockerDialog, self).__init__(parent)
-        self.setupUi(self)
+    def setupUi(self):
+        self.setMinimumSize(500, 500)
+        self.setWindowTitle('Dual Docker')
+        self.setDockNestingEnabled(True)
 
-        QApplication.instance().installEventFilter(self)
+        # Give it some layout. Seems to work better with layout. TODO: See if this can be removed
+        layout = QVBoxLayout()
+        self.label = QLabel(self)
+        layout.addWidget(self.label)
 
+        self.setLayout(layout)
+
+    def closeEvent(self, event):
+        """
+        Is fired when the 'X' button on the dialog is clicked. Confirms closing and initiates reparinting widgets to QGIS MainWindow
+        """
+        # Ask for confirmation before closing
+        confirmation = QMessageBox.question(self, "Confirmation", "Are you sure you want to close the Dual Docker window?", QMessageBox.Yes | QMessageBox.No)
+
+        if confirmation == QMessageBox.Yes:
+            self.returnWidgets()
+            self.parent.plugin_button.setChecked(False)
+            event.accept()  # Close the app
+        else:
+            event.ignore()  # Don't close the app
+
+
+
+    def returnWidgets(self):
+        """
+        Iterates over all child widgets. If they are QDockWidgets they are reparented back to the QGIS MainWindow
+        """
+        QgsMessageLog.logMessage("Closing DualDocker", 'DualDocker', level=Qgis.Info)
+        children = self.children()
+
+        # Loop over all children and reparent them back to the mainWindow
+        for child in children:
+            if isinstance(child, QDockWidget):
+                QgsMessageLog.logMessage(f"Reparenting {child.objectName()}", 'DualDocker', level=Qgis.Info)
+
+                #Reparent widget back to main window
+                self.parent.reparent(child, self.parent.iface.mainWindow())
 
