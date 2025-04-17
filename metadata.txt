@@ -4,7 +4,9 @@
 
 [general]
 name=Dual Docker
-qgisMinimumVersion=3.0
+qgisMinimumVersion=3.40
+supportsQt6=True
+
 description=This plugin creates an extra window to dock your panels on a second monitor
 version=0.1
 author=Emiel Verstegen
