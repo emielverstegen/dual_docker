@@ -81,98 +81,208 @@ class DualDockerWindow(QMainWindow):
         self.current_dragged_over = None
         self.handling_event = False   
 
+        self.event_filters = {}
         self.apply_event_filters()
 
 
     def remove_event_filters(self):
-        # Remove event filter from all dock widgets in this window
-        for dock_widget in self.findChildren(QDockWidget):
-            dock_widget.removeEventFilter(self)
 
-        # Remove event filter from all dock widgets in the iface.mainWindow()
-        for dock_widget in self.iface.mainWindow().findChildren(QDockWidget):
-            dock_widget.removeEventFilter(self)
-
-        # Remove event filter from the main windows
-        self.iface.mainWindow().removeEventFilter(self)
-        self.removeEventFilter(self)
+        for dock_widget, event_filter in self.event_filters.items():
+            dock_widget.removeEventFilter(event_filter)
+        self.event_filters.clear()
 
 
     def apply_event_filters(self):
-        # Apply event filter to all dock widgets in this window
-        for dock_widget in self.findChildren(QDockWidget):
-            dock_widget.installEventFilter(self)
+        # Apply event filter to all dock widgets in this window (not needed as they will already have an event right?)
+        # for dock_widget in self.findChildren(QDockWidget):
+        #     dock_widget.installEventFilter(self)
 
         # Apply event filter to all dock widgets in the iface.mainWindow()
         for dock_widget in self.iface.mainWindow().findChildren(QDockWidget):
-            dock_widget.installEventFilter(self)
+            dock_widget.topLevelChanged.connect(self.on_dock_widget_top_level_changed)
+
+            if dock_widget.isFloating():
+                # If the dock widget is floating, install the floating event filter
+                self.install_floating_event_filter(dock_widget)
+
 
         # Apply event filter to the main windows
-        self.iface.mainWindow().installEventFilter(self)
-        self.installEventFilter(self)
+        #self.iface.mainWindow().installEventFilter(self)
+        #self.installEventFilter(self)
 
-    def eventFilter(self, source, event):
-        if self.handling_event:
-            # Skip handling events while simulating mouse events
-            return super().eventFilter(source, event)
+    def on_dock_widget_top_level_changed(self, floating):
+        dock_widget = self.sender()
+        if floating:
+            # Switch to the floating event filter
+            self.install_floating_event_filter(dock_widget)
+        else:
+            # Switch to the docked event filter
+            #self.install_docked_event_filter(dock_widget)
+            self.remove_floating_event_filter(dock_widget)
 
-        # Handle dock widget drag events
-        if isinstance(source, QDockWidget):
-            if event.type() == QEvent.Type.MouseButtonPress:
-                # Start tracking the dragged dock widget
-                self.current_dragged_dock = source
-                self.current_dragged_over = source.parentWidget()
+    def remove_floating_event_filter(self, dock_widget):
+        # Remove any existing event filter
+        if dock_widget in self.event_filters:
+            dock_widget.removeEventFilter(self.event_filters[dock_widget])
+
+    def install_floating_event_filter(self, dock_widget):
+        # Remove any existing event filter
+        if dock_widget in self.event_filters:
+            dock_widget.removeEventFilter(self.event_filters[dock_widget])
+
+        # Install the floating event filter
+        event_filter = FloatingDockEventFilter(dock_widget, self)
+        dock_widget.installEventFilter(event_filter)
+        self.event_filters[dock_widget] = event_filter
+
+        QgsMessageLog.logMessage(
+            f"Installed floating event filter for '{dock_widget.windowTitle()}'.",
+            "DualDocker",
+            Qgis.Info
+        )
+
+    # def install_docked_event_filter(self, dock_widget):
+    #     # Remove any existing event filter
+    #     if dock_widget in self.event_filters:
+    #         dock_widget.removeEventFilter(self.event_filters[dock_widget])
+
+    #     # Install the docked event filter
+    #     event_filter = DockedDockEventFilter(dock_widget, self)
+    #     dock_widget.installEventFilter(event_filter)
+    #     self.event_filters[dock_widget] = event_filter
+
+    #     QgsMessageLog.logMessage(
+    #         f"Installed docked event filter for '{dock_widget.windowTitle()}'.",
+    #         "DualDocker",
+    #         Qgis.Info
+    #     )
+
+
+# class DockedDockEventFilter(QObject):
+#     def __init__(self, dock_widget, parent_window):
+#         super().__init__()
+#         self.dock_widget = dock_widget
+#         self.parent_window = parent_window  # Reference to the parent DualDockerWindow
+
+#     def eventFilter(self, source, event):
+#         if self.parent_window.handling_event:
+#             # Skip handling events while simulating mouse events
+#             return super().eventFilter(source, event)
+
+#         if event.type() == QEvent.Type.MouseButtonPress:
+#             QgsMessageLog.logMessage(
+#                 f"Mouse button pressed on type {type(source).__name__}",
+#                 "DualDocker",
+#                 Qgis.Info
+#             )
+
+#         # Handle dock widget drag events
+#         if isinstance(source, QDockWidget):
+#             if event.type() == QEvent.Type.MouseButtonPress:
+#                 # Start tracking the dragged dock widget
+#                 self.parent_window.current_dragged_dock = source
+#                 self.parent_window.current_dragged_over = source.parentWidget()
+#                 QgsMessageLog.logMessage(
+#                     f"Started dragging {source.windowTitle()}",
+#                     "DualDocker",
+#                     Qgis.Info
+#                 )
+#             elif event.type() == QEvent.Type.MouseButtonRelease:
+#                 # Stop tracking the dragged dock widget
+#                 QgsMessageLog.logMessage(
+#                     f"Stopped dragging {source.windowTitle()}",
+#                     "DualDocker",
+#                     Qgis.Info
+#                 )
+#                 self.parent_window.current_dragged_dock = None
+
+#             if self.parent_window.current_dragged_dock:
+#                 if event.type() == QEvent.Type.Move:
+#                     mouse_pos = QCursor.pos()
+
+#                     # Check if the mouse is within the geometry of iface.mainWindow()
+#                     iface_window = self.parent_window.iface.mainWindow()
+#                     iface_contains = iface_window.geometry().contains(mouse_pos)
+
+#                     # Check if the mouse is within the geometry of this DualDockerWindow
+#                     dual_docker_contains = self.parent_window.geometry().contains(mouse_pos)
+
+#                     if iface_contains:
+#                         if self.parent_window.current_dragged_over != iface_window:
+#                             # Log the change in hovered window
+#                             QgsMessageLog.logMessage(
+#                                 f"{self.parent_window.current_dragged_dock.windowTitle()} is dragged to the main QGIS window.",
+#                                 "DualDocker",
+#                                 Qgis.Info
+#                             )
+#                             self.parent_window.current_dragged_over = iface_window
+#                             self.parent_window.reparent_dock_widget(iface_window)
+
+#                     elif dual_docker_contains:
+#                         if self.parent_window.current_dragged_over != self.parent_window:
+#                             # Log the change in hovered window
+#                             QgsMessageLog.logMessage(
+#                                 f"{self.parent_window.current_dragged_dock.windowTitle()} is dragged to the DualDockerWindow.",
+#                                 "DualDocker",
+#                                 Qgis.Info
+#                             )
+#                             self.parent_window.current_dragged_over = self.parent_window
+#                             self.parent_window.reparent_dock_widget(self.parent_window)
+
+#         return super().eventFilter(source, event)
+
+
+class FloatingDockEventFilter(QObject):
+    def __init__(self, dock_widget, parent_window):
+        super().__init__()
+        self.dock_widget = dock_widget
+        self.parent_window = parent_window  # Reference to the parent DualDockerWindow
+
+    def eventFilter(self, obj, event):
+
+        # TODO: 
+        # check if the left mouse button is pressed and the mouse is moved
+        # check when a move is started and ended
+        # check if the mouse is moved over the main window or the DualDockerWindow
+        if event.type() == QEvent.Type.Move:
+
+            mouse_pos = QCursor.pos()
+
+            # Check if the mouse is within the geometry of iface.mainWindow()
+            iface_window = self.parent_window.iface.mainWindow()
+            iface_contains = iface_window.geometry().contains(mouse_pos)
+
+            # Check if the mouse is within the geometry of this DualDockerWindow
+            dual_docker_contains = self.parent_window.geometry().contains(mouse_pos)
+
+            QgsMessageLog.logMessage(
+                f"Current parent: {self.dock_widget.parent().windowTitle()}, iface_contains: {iface_contains}, dual_docker_contains: {dual_docker_contains}",
+                "DualDocker",
+                Qgis.Info
+            )
+
+            if iface_contains and self.dock_widget.parent() != iface_window:
+                # Log the change in hovered window
                 QgsMessageLog.logMessage(
-                    f"Started dragging {source.windowTitle()}",
+                    f"{self.dock_widget.windowTitle()} is dragged to the main QGIS window.",
                     "DualDocker",
                     Qgis.Info
                 )
-            elif event.type() == QEvent.Type.MouseButtonRelease:
-                # Stop tracking the dragged dock widget
+                self.reparent_dock_widget(self.dock_widget,iface_window)
+
+            elif dual_docker_contains and self.dock_widget.parent() != self.parent_window:
+                # Log the change in hovered window
                 QgsMessageLog.logMessage(
-                    f"Stopped dragging {source.windowTitle()}",
+                    f"{self.dock_widget.windowTitle()} is dragged to the DualDockerWindow.",
                     "DualDocker",
                     Qgis.Info
                 )
-                self.current_dragged_dock = None
+                self.reparent_dock_widget(self.dock_widget, self.parent_window)
 
-            if self.current_dragged_dock:
-                if event.type() == QEvent.Type.Move:
-                    mouse_pos = QCursor.pos()
 
-                    # Check if the mouse is within the geometry of iface.mainWindow()
-                    iface_window = self.iface.mainWindow()
-                    iface_contains = iface_window.geometry().contains(mouse_pos)
-
-                    # Check if the mouse is within the geometry of this DualDockerWindow
-                    dual_docker_contains = self.geometry().contains(mouse_pos)
-
-                    if iface_contains:
-                        if self.current_dragged_over != iface_window:
-                            # Log the change in hovered window
-                            QgsMessageLog.logMessage(
-                                f"{self.current_dragged_dock.windowTitle()} is dragged to the main QGIS window.",
-                                "DualDocker",
-                                Qgis.Info
-                            )
-                            self.current_dragged_over = iface_window
-                            self.reparent_dock_widget(iface_window)
-
-                    elif dual_docker_contains:
-                        if self.current_dragged_over != self:
-                            # Log the change in hovered window
-                            QgsMessageLog.logMessage(
-                                f"{self.current_dragged_dock.windowTitle()} is dragged to the DualDockerWindow.",
-                                "DualDocker",
-                                Qgis.Info
-                            )
-                            self.current_dragged_over = self
-                            self.reparent_dock_widget(self)
-
-        return super().eventFilter(source, event)
+        return super().eventFilter(obj, event)
     
-
-    def reparent_dock_widget(self, window):
+    def reparent_dock_widget(self, dock_widget, window):
         if not isinstance(window, QMainWindow):
             QgsMessageLog.logMessage(
                 "Target window is not a QMainWindow. Cannot reparent dock widget.",
@@ -181,9 +291,9 @@ class DualDockerWindow(QMainWindow):
             )
             return
 
-        if self.current_dragged_dock:
+        if dock_widget:
             QgsMessageLog.logMessage(
-                f"Reparenting {self.current_dragged_dock.windowTitle()} to {window.windowTitle()}",
+                f"Reparenting {dock_widget.windowTitle()} to {window.windowTitle()}",
                 "DualDocker",
                 Qgis.Info
             )
@@ -191,31 +301,32 @@ class DualDockerWindow(QMainWindow):
             mouse_pos = QCursor.pos()
 
             # # Convert the local position to QPointF
-            local_pos = QPointF(self.current_dragged_dock.mapFromGlobal(mouse_pos))
+            local_pos = QPointF(dock_widget.mapFromGlobal(mouse_pos))
 
             # Simulate a mouse release event to end the current drag
-            QTimer.singleShot(0, lambda: self._simulate_mouse_release(local_pos, mouse_pos))
+            QTimer.singleShot(0, lambda: self._simulate_mouse_release(dock_widget, local_pos, mouse_pos))
 
             # # # Process all pending events to stabilize the widget
             QApplication.processEvents()
 
             # Reparent
             # first, remove the dock widget from its current parent
-            current_parent = self.current_dragged_dock.parentWidget()
+            current_parent = dock_widget.parentWidget()
             if isinstance(current_parent, QMainWindow):
-                current_parent.removeDockWidget(self.current_dragged_dock)
+                current_parent.removeDockWidget(dock_widget)
 
             # Add the dock widget to the new parent
-            window.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.current_dragged_dock)
-            self.current_dragged_dock.setFloating(True)
-            self.current_dragged_dock.show()
+            window.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_widget)
+            #self.current_dragged_dock.setFloating(True)
+            dock_widget.show()
+
 
             # Defer the mouse press event using QTimer
             #QTimer.singleShot(100, lambda: self._simulate_mouse_press(local_pos, mouse_pos))
             #QApplication.processEvents()
 
 
-    def _simulate_mouse_release(self, local_pos, global_pos):
+    def _simulate_mouse_release(self, dock_widget, local_pos, global_pos):
         # Temporarily disable event handling
         self.handling_event = True
 
@@ -228,10 +339,10 @@ class DualDockerWindow(QMainWindow):
             Qt.MouseButton.LeftButton,
             Qt.KeyboardModifier.NoModifier
         )
-        QApplication.sendEvent(self.current_dragged_dock, press_event)
+        QApplication.sendEvent(dock_widget, press_event)
 
         QgsMessageLog.logMessage(
-            f"Mouse release event simulated for {self.current_dragged_dock.windowTitle()}",
+            f"Mouse release event simulated for {dock_widget.windowTitle()}",
             "DualDocker",
             Qgis.Info
         )
@@ -262,38 +373,3 @@ class DualDockerWindow(QMainWindow):
 
         # Re-enable event handling
         self.handling_event = False
-
-
-
-
-
-            # # Remove the dock widget from its current parent
-            # current_parent = self.current_dragged_dock.parentWidget()
-            # if isinstance(current_parent, QMainWindow):
-            #     try:
-            #         current_parent.removeDockWidget(self.current_dragged_dock)
-            #     except RuntimeError as e:
-            #         QgsMessageLog.logMessage(
-            #             f"Error removing dock widget from current parent: {e}",
-            #             "DualDocker",
-            #             Qgis.Critical
-            #         )
-            #         return
-
-            # # Add the dock widget to the new parent
-            # try:
-            #     window.addDockWidget(Qt.LeftDockWidgetArea, self.current_dragged_dock)
-            # except RuntimeError as e:
-            #     QgsMessageLog.logMessage(
-            #         f"Error adding dock widget to new parent: {e}",
-            #         "DualDocker",
-            #         Qgis.Critical
-            #     )
-            #     return
-
-            # # Ensure the dock widget is visible and floating
-            # self.current_dragged_dock.setFloating(True)
-            # self.current_dragged_dock.show()
-
-            # # Reset the current dragged dock reference
-            # self.current_dragged_dock = None
