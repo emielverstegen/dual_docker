@@ -6,12 +6,6 @@ from qgis.core import QgsMessageLog, Qgis
 # initialize Qt resources from file resources.py
 from . import resources
 
-
-# TODO
-# Add event filter to newly created dock widgets in the main window
-# Deal with QStatckedWidget and QTabWidget
-# Improve dragdetection when an floating widget is picked up
-
 class DualDocker:
 
     def __init__(self, iface):
@@ -31,7 +25,6 @@ class DualDocker:
 
         # add toolbar button and menu item
         self.iface.addToolBarIcon(self.action)
-        #self.iface.addPluginToMenu("&Test plugins", self.action)
 
         # connect to signal renderComplete which is emitted when canvas
         # rendering is done
@@ -102,10 +95,6 @@ class DualDockerWindow(QMainWindow):
                 self.install_floating_event_filter(dock_widget)
 
 
-        # Apply event filter to the main windows
-        #self.iface.mainWindow().installEventFilter(self)
-        #self.installEventFilter(self)
-
     def on_dock_widget_top_level_changed(self, floating):
         dock_widget = self.sender()
         if floating:
@@ -113,7 +102,6 @@ class DualDockerWindow(QMainWindow):
             self.install_floating_event_filter(dock_widget)
         else:
             # Switch to the docked event filter
-            #self.install_docked_event_filter(dock_widget)
             self.remove_floating_event_filter(dock_widget)
 
     def remove_floating_event_filter(self, dock_widget):
@@ -144,11 +132,6 @@ class FloatingDockEventFilter(QObject):
         self.parent_window = parent_window  # Reference to the parent DualDockerWindow
 
     def eventFilter(self, obj, event):
-
-        # TODO: 
-        # check if the left mouse button is pressed and the mouse is moved
-        # check when a move is started and ended
-        # check if the mouse is moved over the main window or the DualDockerWindow
         if event.type() == QEvent.Type.Move:
 
             mouse_pos = QCursor.pos()
